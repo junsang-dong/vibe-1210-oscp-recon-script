@@ -21,13 +21,16 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Invalid JSON in request body' });
   }
 
-  const { section, data, apiKey } = requestBody;
+  const { section, data } = requestBody;
 
-  // API 키 검증 (클라이언트에서 전달받거나 환경 변수 사용)
-  const openaiApiKey = apiKey || process.env.OPENAI_API_KEY;
+  // API 키는 환경 변수에서만 가져옴 (Vercel Functions)
+  const openaiApiKey = process.env.OPENAI_API_KEY;
 
   if (!openaiApiKey) {
-    return res.status(400).json({ error: 'OpenAI API key is required' });
+    return res.status(500).json({ 
+      error: 'OpenAI API key is not configured. Please set OPENAI_API_KEY environment variable in Vercel.',
+      hint: 'Vercel Dashboard → Settings → Environment Variables → Add OPENAI_API_KEY'
+    });
   }
 
   try {

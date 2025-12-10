@@ -1,16 +1,13 @@
 import { useState } from 'react'
-import { Shield, FileText, Download, Plus, Trash2, Key, Eye, EyeOff } from 'lucide-react'
+import { Shield, FileText, Download, Plus, Trash2 } from 'lucide-react'
 import Header from './components/Header'
 import TestInfoForm from './components/TestInfoForm'
 import FindingsForm from './components/FindingsForm'
 import ReportPreview from './components/ReportPreview'
 import PDFExport from './components/PDFExport'
 import { getSampleData, getAllSampleScenarios } from './utils/sampleData'
-import { callOpenAI } from './utils/openai'
 
 function App() {
-  const [apiKey, setApiKey] = useState('')
-  const [showApiKey, setShowApiKey] = useState(false)
   const [testInfo, setTestInfo] = useState({
     testDate: new Date().toISOString().split('T')[0],
     tester: '',
@@ -61,11 +58,6 @@ function App() {
 
   // 보고서 생성
   const generateReport = async () => {
-    if (!apiKey || apiKey.trim() === '') {
-      alert('OpenAI API 키를 입력해주세요.')
-      return
-    }
-
     setLoading(true)
     try {
       // API 엔드포인트 (Vercel Function 사용)
@@ -83,8 +75,7 @@ function App() {
             target: testInfo.target,
             findingsCount: findings.length,
             criticalCount: findings.filter(f => f.severity === 'Critical').length
-          },
-          apiKey: apiKey
+          }
         })
       })
 
@@ -114,8 +105,7 @@ function App() {
           data: {
             target: testInfo.target,
             scope: `${testInfo.targetHostname} (${testInfo.targetOS})`
-          },
-          apiKey: apiKey
+          }
         })
       })
 
@@ -148,8 +138,7 @@ function App() {
                 title: finding.title,
                 severity: finding.severity,
                 description: finding.description
-              },
-              apiKey: apiKey
+              }
             })
           })
 
@@ -184,7 +173,7 @@ function App() {
       setCurrentView('preview')
     } catch (error) {
       console.error('보고서 생성 오류:', error)
-      alert(`보고서 생성 중 오류가 발생했습니다: ${error.message}\n\nAPI 키를 확인해주세요.`)
+      alert(`보고서 생성 중 오류가 발생했습니다: ${error.message}\n\nVercel 환경 변수에 OPENAI_API_KEY가 설정되어 있는지 확인해주세요.`)
     } finally {
       setLoading(false)
     }
@@ -225,38 +214,6 @@ function App() {
         {/* 입력 뷰 */}
         {currentView === 'input' && (
           <div className="space-y-6">
-            {/* API 키 입력 */}
-            <div className="card border-2 border-blue-200 bg-blue-50">
-              <div className="flex items-center gap-2 mb-4">
-                <Key className="text-blue-600" size={24} />
-                <h2 className="text-xl font-bold text-gray-800">
-                  OpenAI API 키 설정
-                </h2>
-              </div>
-              <div className="space-y-3">
-                <div className="relative">
-                  <input
-                    type={showApiKey ? 'text' : 'password'}
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="sk-..."
-                    className="input-field pr-10"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowApiKey(!showApiKey)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
-                  >
-                    {showApiKey ? <EyeOff size={20} /> : <Eye size={20} />}
-                  </button>
-                </div>
-                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-sm text-yellow-800">
-                  <p className="font-semibold mb-1">⚠️ 보안 안내</p>
-                  <p>API 키는 브라우저에 저장되지 않으며, 보고서 생성에만 사용됩니다. API 키는 안전하게 관리하세요.</p>
-                </div>
-              </div>
-            </div>
-
             {/* 샘플 데이터 선택 */}
             <div className="card">
               <h2 className="text-xl font-bold text-gray-800 mb-4">
@@ -335,7 +292,7 @@ function App() {
             <div className="card">
               <button
                 onClick={generateReport}
-                disabled={loading || findings.length === 0 || !apiKey.trim()}
+                disabled={loading || findings.length === 0}
                 className="w-full btn-primary flex items-center justify-center gap-2 py-4 text-lg disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {loading ? (
@@ -350,11 +307,6 @@ function App() {
                   </>
                 )}
               </button>
-              {!apiKey.trim() && (
-                <p className="text-sm text-red-600 mt-2 text-center">
-                  API 키를 입력해야 보고서를 생성할 수 있습니다.
-                </p>
-              )}
             </div>
           </div>
         )}
