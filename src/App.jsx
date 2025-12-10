@@ -87,8 +87,22 @@ function App() {
           apiKey: apiKey
         })
       })
+
+      if (!summaryResponse.ok) {
+        const errorText = await summaryResponse.text()
+        let errorMessage = `HTTP ${summaryResponse.status}: ${summaryResponse.statusText}`
+        try {
+          const errorJson = JSON.parse(errorText)
+          errorMessage = errorJson.error || errorMessage
+        } catch (e) {
+          errorMessage = errorText || errorMessage
+        }
+        throw new Error(errorMessage)
+      }
+
       const summaryData = await summaryResponse.json()
       if (summaryData.error) throw new Error(summaryData.error)
+      if (!summaryData.content) throw new Error('No content in response')
       const executiveSummary = summaryData.content
 
       // Methodology 생성
@@ -104,8 +118,22 @@ function App() {
           apiKey: apiKey
         })
       })
+
+      if (!methodologyResponse.ok) {
+        const errorText = await methodologyResponse.text()
+        let errorMessage = `HTTP ${methodologyResponse.status}: ${methodologyResponse.statusText}`
+        try {
+          const errorJson = JSON.parse(errorText)
+          errorMessage = errorJson.error || errorMessage
+        } catch (e) {
+          errorMessage = errorText || errorMessage
+        }
+        throw new Error(errorMessage)
+      }
+
       const methodologyData = await methodologyResponse.json()
       if (methodologyData.error) throw new Error(methodologyData.error)
+      if (!methodologyData.content) throw new Error('No content in response')
       const methodology = methodologyData.content
 
       // 각 Finding에 대한 상세 분석 생성
@@ -124,8 +152,22 @@ function App() {
               apiKey: apiKey
             })
           })
+
+          if (!response.ok) {
+            const errorText = await response.text()
+            let errorMessage = `HTTP ${response.status}: ${response.statusText}`
+            try {
+              const errorJson = JSON.parse(errorText)
+              errorMessage = errorJson.error || errorMessage
+            } catch (e) {
+              errorMessage = errorText || errorMessage
+            }
+            throw new Error(errorMessage)
+          }
+
           const data = await response.json()
           if (data.error) throw new Error(data.error)
+          if (!data.content) throw new Error('No content in response')
           return {
             ...finding,
             generatedContent: data.content

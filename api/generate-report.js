@@ -14,7 +14,14 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { section, data, apiKey } = req.body;
+  let requestBody;
+  try {
+    requestBody = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+  } catch (e) {
+    return res.status(400).json({ error: 'Invalid JSON in request body' });
+  }
+
+  const { section, data, apiKey } = requestBody;
 
   // API 키 검증 (클라이언트에서 전달받거나 환경 변수 사용)
   const openaiApiKey = apiKey || process.env.OPENAI_API_KEY;
@@ -47,18 +54,37 @@ export default async function handler(req, res) {
       })
     });
 
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorMessage = `OpenAI API error: ${response.status}`;
+      try {
+        const errorJson = JSON.parse(errorText);
+        errorMessage = errorJson.error?.message || errorMessage;
+      } catch (e) {
+        errorMessage = errorText || errorMessage;
+      }
+      throw new Error(errorMessage);
+    }
+
     const result = await response.json();
     
     if (result.error) {
-      throw new Error(result.error.message);
+      throw new Error(result.error.message || 'Unknown OpenAI API error');
     }
 
-    res.status(200).json({
+    if (!result.choices || !result.choices[0] || !result.choices[0].message) {
+      throw new Error('Invalid response format from OpenAI API');
+    }
+
+    return res.status(200).json({
       content: result.choices[0].message.content
     });
   } catch (error) {
     console.error('API Error:', error);
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({ 
+      error: error.message || 'Internal server error',
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 }
 
